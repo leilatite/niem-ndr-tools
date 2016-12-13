@@ -1,4 +1,4 @@
-pkg
+.DS_Store
 tmp
-var
-tmp.*
+*~
+.#*

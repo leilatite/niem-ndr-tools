@@ -1,180 +1,164 @@
 
 SHELL = /bin/bash
 
-CHECKSUM_FILE = lib/shasums.txt
+# Copyright 2015 Georgia Tech Research Corporation (GTRC). All rights reserved.
 
-CACHE_DIR = var/cache
-ISO_SCHEMATRON_XSLT2_ZIP = $(CACHE_DIR)/iso-schematron-xslt2.zip
-SAXON_HE_ZIP = $(CACHE_DIR)/SaxonHE9-5-1-4J.zip
-XALAN_ZIP = $(CACHE_DIR)/xalan-j_2_7_1-bin.zip
-NIEM_REL_ZIP = $(CACHE_DIR)/niem-3.0.rel.zip
-CATALOG_DTD_CACHE = $(CACHE_DIR)/www.oasis-open.org/committees/entity/release/1.0/catalog.dtd
+# This program is free software: you can redistribute it and/or modify it under
+# the terms of the GNU General Public License as published by the Free Software
+# Foundation, either version 3 of the License, or (at your option) any later
+# version.
 
-RESOLVER_HREF = http://www.gtlib.gatech.edu/pub/apache/xerces/xml-commons/xml-commons-resolver-1.2.zip
-RESOLVER_ZIP = $(CACHE_DIR)/xml-commons-resolver-1.2.zip
-TOKEN_EXTRACTED_RESOLVER = $(TOKENS_DIR)/extracted-resolver
+# This program is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more
+# details.
 
-CACHED_FILES = $(ISO_SCHEMATRON_XSLT2_ZIP) $(SAXON_HE_ZIP) $(XALAN_ZIP) $(NIEM_REL_ZIP) $(CATALOG_DTD_CACHE) $(RESOLVER_ZIP)
+# You should have received a copy of the GNU General Public License along with
+# this program.  If not, see <http://www.gnu.org/licenses/>.
 
-TOKENS_DIR = tmp/tokens
-TOKEN_CHECKSUMS_OK = $(TOKENS_DIR)/checksums-ok
-TOKEN_EXTRACTED_SCHEMATRON = $(TOKENS_DIR)/extracted-schematron
-TOKEN_EXTRACTED_SAXON = $(TOKENS_DIR)/extracted-saxon
-TOKEN_EXTRACTED_XALAN = $(TOKENS_DIR)/extracted-xalan
-TOKEN_EXTRACTED_NIEM = $(TOKENS_DIR)/extracted-niem
-TOKEN_PATCHED_SCHEMATRON = $(TOKENS_DIR)/patched-schematron
+release = ${shell git describe --tags 2> /dev/null}
 
-.PHONY: default
-default: help
+ifeq (${release},)
+dist_name = niem-ndr-tools-LATEST
+else
+dist_name = ${release}
+endif
 
-.PHONY: help
-help:
-	@ echo "Pick a target:"
-	@ echo "  all: build all the usual suspects"
-	@ echo "  clean: clean up the basics: remove tokens and redo a lot of stuff"
-	@ echo "  distclean: nuke the package distribution zips and otherwise clean everything you can"
-	@ echo "  set-shasums: reset the checksums so that the build system expects the zip files that are already on disk"
-	@ echo "  reset-patch: rebuild the patch file so that the build system recreates the ISO Schematron distribution as it is on disk"
-	@ echo "  check: identify badly-permissioned test scripts (must be at least u+rx)"
-	@ echo "  retest: clean up traces of tests and run tests again"
-	@ echo "  test: run tests, if needed"
-	@ echo "  cache: download cached files"
+.SECONDARY:
 
-all: $(TOKEN_CHECKSUMS_OK) $(TOKEN_EXTRACTED_SCHEMATRON) $(TOKEN_EXTRACTED_SAXON) $(TOKEN_EXTRACTED_XALAN) $(TOKEN_PATCHED_SCHEMATRON) $(TOKEN_EXTRACTED_NIEM) pkg/oasis/catalog.dtd $(TOKEN_EXTRACTED_RESOLVER)
+zip_dir = tmp/zip
+root_dir = ${zip_dir}/${dist_name}
+override root_dir_abs = ${shell mkdir -p ${root_dir} && cd ${root_dir} && pwd}
+stow_dir = ${root_dir}/stow
 
-.PHONY: cache
-cache: $(CACHED_FILES)
+# building some packages requires other packages, so the pile goes on the path, and order matters
+PATH := ${root_dir_abs}/bin:${PATH}
 
-##################################################################
-# resolver
+stow = stow -v --no-folding
 
-$(RESOLVER_ZIP):
-	mkdir -p $(dir $@)
-	curl --location -o $@ $(RESOLVER_HREF)
+repos_dir= ${zip_dir}/repos
+tokens_dir = ${zip_dir}/token
 
-$(TOKEN_EXTRACTED_RESOLVER): $(RESOLVER_ZIP) $(TOKEN_CHECKSUMS_OK)
-	rm -rf pkg/xml-commons-resolver
-	mkdir -p pkg/xml-commons-resolver
-	unzip -j -d pkg/xml-commons-resolver $< xml-commons-resolver-1.2/resolver.jar
-	mkdir -p $(dir $@)
-	touch $@
+phases = sync configure make install
 
-##################################################################
+# order matters here
+packages = \
+	wrtools_core \
+	saxon_cli \
+	xalan_cli \
+	schematron_cli \
+	xml_schema_validator \
+	self \
 
-$(ISO_SCHEMATRON_XSLT2_ZIP):
-	mkdir -p $(dir $@)
-	curl -o $@ https://schematron.googlecode.com/files/iso-schematron-xslt2.zip
+saxon_cli_repo            = https://github.com/webb/saxon-cli.git
+schematron_cli_repo       = https://github.com/webb/schematron-cli.git
+wrtools_core_repo         = https://github.com/webb/wrtools-core.git
+xalan_cli_repo            = https://github.com/webb/xalan-cli.git
+xml_schema_validator_repo = https://github.com/webb/xml-schema-validator.git
 
-$(TOKEN_EXTRACTED_SCHEMATRON): $(ISO_SCHEMATRON_XSLT2_ZIP) $(TOKEN_CHECKSUMS_OK) 
-	rm -rf pkg/iso-schematron-xslt2
-	rm -f $(TOKEN_PATCHED_SCHEMATRON)
-	mkdir -p pkg/iso-schematron-xslt2
-	unzip -d pkg/iso-schematron-xslt2 $<
-	mkdir -p $(dir $@)
-	touch $@
+.PHONY: all # build all products (the default target)
+all: ${packages:%=${tokens_dir}/install/%}
 
-$(SAXON_HE_ZIP):
-	mkdir -p $(dir $@)
-	curl --location -o $@ http://downloads.sourceforge.net/project/saxon/Saxon-HE/9.5/SaxonHE9-5-1-4J.zip
+.PHONY: sync # make sure stuff has been gotten from git repos
+sync: ${packages:%=${tokens_dir}/sync/%}
 
-$(TOKEN_EXTRACTED_SAXON): $(SAXON_HE_ZIP) $(TOKEN_CHECKSUMS_OK) 
-	rm -rf pkg/saxon
-	mkdir -p pkg/saxon
-	unzip -d pkg/saxon $< saxon9he.jar
-	mkdir -p $(dir $@)
-	touch $@
+.PHONY: resync # force getting stuff from git repositories
+resync:
+	${RM} -r ${tokens_dir}/sync
+	${MAKE} -f unconfigured.mk sync
 
-$(XALAN_ZIP):
-	mkdir -p $(dir $@)
-	curl --location -o $@ http://archive.apache.org/dist/xml/xalan-j/binaries/xalan-j_2_7_1-bin.zip
+.PHONY: install # put stuff in zip dir
+install: ${packages:%=${tokens_dir}/install/%}
 
-$(TOKEN_EXTRACTED_XALAN): $(XALAN_ZIP) $(TOKEN_CHECKSUMS_OK) 
-	rm -rf pkg/xalan
-	mkdir -p pkg/xalan
-	unzip -j -d pkg/xalan $< xalan-j_2_7_1/xalan.jar xalan-j_2_7_1/serializer.jar xalan-j_2_7_1/xercesImpl.jar xalan-j_2_7_1/xml-apis.jar
-	mkdir -p $(dir $@)
-	touch $@
-
-$(NIEM_REL_ZIP):
-	mkdir -p $(dir $@)
-	curl --location -o $@ http://release.niem.gov/niem/3.0/niem-3.0.rel.zip
-
-$(TOKEN_EXTRACTED_NIEM): $(NIEM_REL_ZIP)
-	rm -rf pkg/niem-release
-	mkdir -p pkg/niem-release
-	unzip -d pkg/niem-release $(NIEM_REL_ZIP)
-	mkdir -p $(dir $@)
-	touch $@
-
-##################################################################
-# DTDs
-
-dtd: pkg/oasis/catalog.dtd
-
-pkg/oasis/catalog.dtd: $(CACHE_DIR)/www.oasis-open.org/committees/entity/release/1.0/catalog.dtd
-	mkdir -p $(dir $@)
-	cp $< $@
-
-$(CACHE_DIR)/www.oasis-open.org/committees/entity/release/1.0/catalog.dtd:
-	mkdir -p $(dir $@)
-	curl --location -o $@ http://www.oasis-open.org/committees/entity/release/1.0/catalog.dtd
-
-##################################################################
-# checksums
-
-$(TOKEN_CHECKSUMS_OK): $(CHECKSUM_FILE) $(CACHED_FILES)
-	shasum -c $(CHECKSUM_FILE)
-	mkdir -p $(dir $@)
-	touch $@
-
-set-shasums: $(CACHED_FILES)
-	shasum -a 1 -b $^ > $(CHECKSUM_FILE)
-
-##################################################################
-# patches
-
-$(TOKENS_DIR)/patched-schematron: lib/iso-schematron-xslt2.patch $(TOKEN_EXTRACTED_SCHEMATRON)
-	patch -p0 < $<
-	mkdir -p $(dir $@)
-	touch $@
-
-reset-patch:
-	mv pkg/iso-schematron-xslt2 pkg/iso-schematron-xslt2.patched
-	unzip -d pkg/iso-schematron-xslt2 var/cache/iso-schematron-xslt2.zip
-	- diff -Naur -x '*~' pkg/iso-schematron-xslt2 pkg/iso-schematron-xslt2.patched > lib/iso-schematron-xslt2.patch
-	rm -r pkg/iso-schematron-xslt2
-	mv pkg/iso-schematron-xslt2.patched pkg/iso-schematron-xslt2
-
-##################################################################
-# cleanup
-
+.PHONY: clean # clean up build products
 clean:
-	rm -rf tmp pkg
-	find . -type f -name 'tmp.*' -print0 | xargs -0 rm -f
+	${RM} -r ${zip_dir}
 
-distclean: clean
-	rm -rf var
-	find . -type f -name '*~' -print0 | xargs -0 rm -f
+.PHONY: zip # create zip file
+zip: ${packages:%=${tokens_dir}/install/%}
+	${RM} ${zip_dir}/${dist_name}.zip
+	cd ${zip_dir} \
+	  && find -L ${dist_name} ! -path "${dist_name}"'/stow/*' -type f -print0 \
+	       | xargs -0 zip -9r ${dist_name}.zip
 
-##################################################################
-# tests
+.PHONY: help # print this help
+help:
+	@ echo Established targets:
+	@ sed -e 's/^.PHONY: *\([^ #]*\) *\# *\(.*\)$$/  \1: \2/p;d' zip.mk
+	@ echo set variable 'release' to define name of zip
 
-# any file named run-test* that is executable by the current user
-TEST_SCRIPTS =     $(shell find tests -type f -name 'run-test*' ! -name '*~'   -perm -500)
-BAD_TEST_SCRIPTS = $(shell find tests -type f -name 'run-test*' ! -name '*~' ! -perm -500)
-TEST_TOKENS = $(patsubst %,$(TOKENS_DIR)/ran-test/%,$(TEST_SCRIPTS))
+#############################################################################
+# packages, in order
+#############################################################################
+# wrtools-core
 
-check:
-	@ for s in $(BAD_TEST_SCRIPTS); do printf "Bad permission on %s\n" "$$s"; done
+.PHONY: wrtools-core
+wrtools-core: ${phases:%=${tokens_dir}/%/wrtools_core}
 
-retest:
-	@ $(RM) $(TEST_TOKENS)
-	@ $(MAKE) test
+${tokens_dir}/sync/wrtools_core:
+	if [[ -d ${stow_dir}/wrtools-core ]]; \
+	then cd ${stow_dir}/wrtools-core && git pull; \
+	else mkdir -p ${stow_dir} \
+	     && cd ${stow_dir} \
+	     && git clone ${wrtools_core_repo} wrtools-core; \
+	fi
+	mkdir -p ${dir $@} && touch $@
 
-test: $(TEST_TOKENS)
+${tokens_dir}/configure/wrtools_core: ${tokens_dir}/sync/wrtools_core
+	mkdir -p ${dir $@} && touch $@
 
-$(TOKENS_DIR)/ran-test/%: %
-	@ mkdir -p $(dir $@)
-	if ! bin/run-tests $< > $@; then rm $@; fi
+${tokens_dir}/make/wrtools_core: ${tokens_dir}/configure/wrtools_core
+	mkdir -p ${dir $@} && touch $@
+
+${tokens_dir}/install/wrtools_core: ${tokens_dir}/make/wrtools_core
+	mkdir -p ${stow_dir} && cd ${stow_dir} && ${stow} --stow wrtools-core
+	mkdir -p ${dir $@} && touch $@
+
+#############################################################################
+# self
+
+.PHONY: self
+self: ${phases:%=${tokens_dir}/%/self}
+
+${tokens_dir}/sync/self:
+	rm -rf ${stow_dir}/self
+	mkdir -p ${stow_dir}/self
+	tar cf - $$(git ls-files) | ( cd ${stow_dir}/self && tar xf -)
+	mkdir -p ${dir $@} && touch $@
+
+${tokens_dir}/configure/self: ${tokens_dir}/sync/self
+	mkdir -p ${dir $@} && touch $@
+
+${tokens_dir}/make/self: ${tokens_dir}/configure/self
+	mkdir -p ${dir $@} && touch $@
+
+${tokens_dir}/install/self: ${tokens_dir}/make/self
+	mkdir -p ${stow_dir} && cd ${stow_dir} && ${stow} --stow self
+	mkdir -p ${dir $@} && touch $@
+
+
+#############################################################################
+# defaults
+
+${tokens_dir}/sync/%:
+	if [[ -d ${repos_dir}/$* ]]; \
+	then cd ${repos_dir}/$* && git pull; \
+	else mkdir -p ${repos_dir} \
+	     && cd ${repos_dir} \
+	     && git clone ${$*_repo} $*; \
+	fi
+	mkdir -p ${dir $@} && touch $@
+
+${tokens_dir}/configure/%: ${tokens_dir}/sync/%
+	cd ${repos_dir}/$* && ./configure --prefix=${root_dir_abs}
+	mkdir -p ${dir $@} && touch $@
+
+${tokens_dir}/make/%: ${tokens_dir}/configure/%
+	make -C ${repos_dir}/$*
+	mkdir -p ${dir $@} && touch $@
+
+${tokens_dir}/install/%: ${tokens_dir}/make/%
+	make -C ${repos_dir}/$* install
+	mkdir -p ${dir $@} && touch $@
 
 
